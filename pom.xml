@@ -26,7 +26,7 @@
     <groupId>org.wso2.andes</groupId>
     <artifactId>andes-parent</artifactId>
     <packaging>pom</packaging>
-    <version>3.3.11</version>
+    <version>3.3.11.1-SNAPSHOT</version>
     <name>Andes</name>
     <description>Andes, Distributed message broker engine</description>
 
@@ -611,7 +611,7 @@
         <org.apache.commons.pool.version>2.4.2</org.apache.commons.pool.version>
         <commons-lang.imp.pkg.version>[2.6,3.0)</commons-lang.imp.pkg.version>
 
-    </properties>
+    <project.scm.id>wso2-scm-server</project.scm.id></properties>
 
     <mailingLists>
         <mailingList>
