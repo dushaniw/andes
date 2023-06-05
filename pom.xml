@@ -26,7 +26,7 @@
     <groupId>org.wso2.andes</groupId>
     <artifactId>andes-parent</artifactId>
     <packaging>pom</packaging>
-    <version>3.3.11.2-SNAPSHOT</version>
+    <version>3.3.11.2</version>
     <name>Andes</name>
     <description>Andes, Distributed message broker engine</description>
 
@@ -691,5 +691,5 @@
         </pluginRepository>
     </pluginRepositories>
 
-<scm><url>https://github.com/wso2-support/andes</url><developerConnection>scm:git:https://github.com/wso2-support/andes</developerConnection><connection>scm:git:https://github.com/wso2-support/andes</connection>  <tag>HEAD</tag>
+<scm><url>https://github.com/wso2-support/andes</url><developerConnection>scm:git:https://github.com/wso2-support/andes</developerConnection><connection>scm:git:https://github.com/wso2-support/andes</connection>  <tag>v3.3.11.2</tag>
   </scm></project>
