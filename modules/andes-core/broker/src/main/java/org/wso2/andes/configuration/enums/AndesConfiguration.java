@@ -166,6 +166,12 @@ public enum AndesConfiguration implements ConfigurationProperty {
              "false", Boolean.class),
 
     /**
+     *  Disabling this configuration will prevent the server from authorizing the client when
+     *  creating queues
+     */
+    AUTHORIZATION("transports/amqp/security/authorization", "REQUIRED", String.class),
+
+    /**
      * Topics and queue names are validated according to AMQP specification. Therefore special
      * characters are not allowed in the topic and queue names. By enabling this property strict
      * validation will not be done against topic and queue names.
