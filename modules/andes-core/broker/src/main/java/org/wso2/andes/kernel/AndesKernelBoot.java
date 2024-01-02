@@ -151,7 +151,6 @@ public class AndesKernelBoot {
     public static void clearMembershipEventsAndRecoverDistributedSlotMap() throws AndesException {
         if (!AndesContext.getInstance().isClusteringEnabled()) {
             removeNonDurableQueues();
-            removeAllSubscriptions();
             recoverMapsForEachQueue();
         }
     }
