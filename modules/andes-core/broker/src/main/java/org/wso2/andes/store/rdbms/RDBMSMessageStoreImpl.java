@@ -24,7 +24,8 @@ import com.google.common.cache.LoadingCache;
 import com.google.common.cache.Weigher;
 import com.gs.collections.impl.list.mutable.primitive.LongArrayList;
 import com.gs.collections.impl.map.mutable.primitive.LongObjectHashMap;
-import org.apache.log4j.Logger;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.wso2.andes.configuration.util.ConfigurationProperties;
 import org.wso2.andes.kernel.AndesContextStore;
 import org.wso2.andes.kernel.AndesException;
@@ -47,6 +48,7 @@ import org.wso2.carbon.metrics.manager.Level;
 import org.wso2.carbon.metrics.manager.MetricManager;
 import org.wso2.carbon.metrics.manager.Timer.Context;
 
+import javax.annotation.ParametersAreNonnullByDefault;
 import java.sql.BatchUpdateException;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
@@ -75,7 +77,7 @@ import static org.wso2.andes.store.rdbms.RDBMSConstants.TASK_RETRIEVING_CONTENT_
  */
 public class RDBMSMessageStoreImpl implements MessageStore {
 
-    private static final Logger log = Logger.getLogger(RDBMSMessageStoreImpl.class);
+    private static final Logger log = LoggerFactory.getLogger(RDBMSMessageStoreImpl.class);
 
     /**
      * RDBMS connection source object
@@ -158,19 +160,7 @@ public class RDBMSMessageStoreImpl implements MessageStore {
                     public int weigh(String s, Integer integer) {
                         return s.length();
                     }
-                }).build(new CacheLoader<String, Integer>() {
-                    public Integer load(String queueName) throws AndesException {
-                        try {
-                            Integer queueID = getQueueID(queueName);
-                            if (log.isDebugEnabled()) {
-                                log.debug("Loaded queue: " + queueName + " to the cache from database");
-                            }
-                            return queueID;
-                        } catch (SQLException e) {
-                            throw new AndesException("Error retrieving queue id for queue: " + queueName, e);
-                        }
-                    }
-                });
+                }).build(new QueueMappingCacheLoader());
     }
 
     /**
@@ -1399,107 +1389,6 @@ public class RDBMSMessageStoreImpl implements MessageStore {
     }
 
     /**
-     * Retrieved the queue ID from DB. If the ID is not present create a new queue and get the id.
-     *
-     * @param destinationQueueName queue name
-     * @return queue id
-     * @throws SQLException
-     */
-    private int getQueueID(final String destinationQueueName) throws SQLException {
-
-        int queueID = -1;
-        Connection connection = null;
-        PreparedStatement preparedStatement = null;
-        ResultSet resultSet = null;
-        Context contextRead = MetricManager.timer(MetricsConstants.DB_READ, Level.INFO).start();
-        try {
-            connection = getConnection();
-            preparedStatement = connection.prepareStatement(RDBMSConstants.PS_SELECT_QUEUE_ID);
-            preparedStatement.setString(1, destinationQueueName);
-            resultSet = preparedStatement.executeQuery();
-
-            // ResultSet.first() is not supported by MS SQL hence using next()
-            if (resultSet.next()) {
-                queueID = resultSet.getInt(RDBMSConstants.QUEUE_ID);
-            }
-            resultSet.close();
-
-            // If queue is not present create a new queue entry
-            if (queueID == -1) {
-                createNewQueue(connection, destinationQueueName);
-            }
-
-            // Get the resultant ID.
-            // NOTE: In different DB implementations getting the auto generated queue id differs in subtle ways
-            // Hence doing a simple select again after adding the entry to DB
-            resultSet = preparedStatement.executeQuery();
-            if (resultSet.next()) {
-                queueID = resultSet.getInt(RDBMSConstants.QUEUE_ID);
-            }
-            connection.commit();
-        } catch (SQLException e) {
-            rollback(connection, RDBMSConstants.TASK_RETRIEVING_QUEUE_ID);
-            log.error("Error occurred while retrieving destination queue id " +
-                    "for destination queue " + destinationQueueName, e);
-            throw e;
-        } finally {
-            contextRead.stop();
-            close(connection, preparedStatement, resultSet,
-                    RDBMSConstants.TASK_RETRIEVING_QUEUE_ID + destinationQueueName);
-        }
-        return queueID;
-    }
-
-    /**
-     * Using the provided connection create a new queue with queue id in database
-     *
-     * @param connection           Connection
-     * @param destinationQueueName queue name
-     * @throws SQLException
-     */
-    private void createNewQueue(final Connection connection, final String destinationQueueName) throws SQLException {
-
-        PreparedStatement preparedStatement = null;
-        Context contextWrite = MetricManager.timer(MetricsConstants.DB_WRITE, Level.INFO).start();
-
-        try {
-
-            //Add the queue to the database
-            preparedStatement = connection.prepareStatement(RDBMSConstants.PS_INSERT_QUEUE);
-            preparedStatement.setString(1, destinationQueueName);
-            preparedStatement.executeUpdate();
-            connection.commit();
-            preparedStatement.close();
-
-            //Add the queue to the internal map as well
-            int queueId = getQueueID(destinationQueueName);
-            if (-1 != queueId) {
-                queueMappings.put(destinationQueueName, queueId);
-            }
-
-        } catch (SQLException e) {
-            AndesException andesException = rdbmsStoreUtils
-                    .convertSQLException("Error occurred while creating queue", e);
-
-            if (andesException instanceof AndesDataIntegrityViolationException) {
-                // This exception occurred because some other node has created the queue in parallel.
-                // Therefore no need to create the queue. It's already created.
-                // Nothing need to be done if this exception occur.
-                log.warn("Queue already created. Skipping insert destination queue [" + destinationQueueName +
-                        "] to database ");
-            } else {
-                log.error("Error occurred while inserting destination queue [" + destinationQueueName +
-                        "] to database ");
-                throw e;
-            }
-        } finally {
-            contextWrite.stop();
-            String task = RDBMSConstants.TASK_CREATING_QUEUE + destinationQueueName;
-            close(preparedStatement, task);
-        }
-    }
-
-    /**
      * Returns SQL Connection object from connection pooled data source.
      *
      * @return Connection
@@ -1950,6 +1839,10 @@ public class RDBMSMessageStoreImpl implements MessageStore {
             preparedStatement.setString(1, storageQueueName);
             preparedStatement.execute();
             connection.commit();
+            queueMappings.invalidate(storageQueueName);
+            if (log.isDebugEnabled()) {
+                log.debug("Removed queue mapping from database for queue {}", storageQueueName);
+            }
         } catch (SQLException e) {
             rollback(connection, RDBMSConstants.TASK_DELETE_QUEUE_MAPPING);
             throw rdbmsStoreUtils.convertSQLException(
@@ -2534,5 +2427,99 @@ public class RDBMSMessageStoreImpl implements MessageStore {
         return messageIds;
     }
 
+    private class QueueMappingCacheLoader extends CacheLoader<String, Integer> {
+
+        @Override
+        @ParametersAreNonnullByDefault
+        public Integer load(String destinationQueueName) throws Exception {
+            int queueId = getQueueId(destinationQueueName);
+            if (queueId == -1) {
+                queueId = createQueueIdMapping(destinationQueueName);
+            }
+            if (log.isDebugEnabled()) {
+                log.debug("Queue id {} loaded for queue name {}", queueId, destinationQueueName);
+            }
+            return queueId;
+        }
+
+        /**
+         * Using the provided connection create a new queue with queue id in database
+         *
+         * @param destinationQueueName queue name
+         * @throws AndesException throws when storing the queue mapping into the database fails
+         */
+        private int createQueueIdMapping(final String destinationQueueName) throws AndesException {
+
+            PreparedStatement preparedStatement = null;
+            Context contextWrite = MetricManager.timer(MetricsConstants.DB_WRITE, Level.INFO).start();
+            try {
+                Connection connection = getConnection();
+                //Add the queue to the database
+                preparedStatement = connection.prepareStatement(RDBMSConstants.PS_INSERT_QUEUE);
+                preparedStatement.setString(1, destinationQueueName);
+                preparedStatement.executeUpdate();
+                connection.commit();
+                preparedStatement.close();
+
+            } catch (SQLException e) {
+                AndesException andesException = rdbmsStoreUtils
+                        .convertSQLException("Error occurred while creating queue mapping", e);
+
+                if (andesException instanceof AndesDataIntegrityViolationException) {
+                    // This exception occurred because some other node has created the queue in parallel.
+                    // Therefore, no need to create the queue. It's already created.
+                    // Nothing need to be done if this exception occur.
+                    log.warn("Queue already created. Skipping insert destination queue [" + destinationQueueName +
+                            "] to database ");
+                } else {
+                    log.error("Error occurred while inserting destination queue [" + destinationQueueName +
+                            "] to database ");
+                    throw andesException;
+                }
+            } finally {
+                contextWrite.stop();
+                String task = RDBMSConstants.TASK_CREATING_QUEUE + destinationQueueName;
+                close(preparedStatement, task);
+            }
+            return getQueueId(destinationQueueName);
+        }
+
+        /**
+         * Retrieved the queue ID from DB. If the ID is not present create a new queue and get the id.
+         *
+         * @param destinationQueueName queue name
+         * @return queue id
+         * @throws AndesException throws when the queue id cannot be retrieved from the database
+         */
+        private int getQueueId(final String destinationQueueName) throws AndesException {
+
+            int queueId = -1;
+            Connection connection = null;
+            PreparedStatement preparedStatement = null;
+            ResultSet resultSet = null;
+            Context contextRead = MetricManager.timer(MetricsConstants.DB_READ, Level.INFO).start();
+            try {
+                connection = getConnection();
+                preparedStatement = connection.prepareStatement(RDBMSConstants.PS_SELECT_QUEUE_ID);
+                preparedStatement.setString(1, destinationQueueName);
+                resultSet = preparedStatement.executeQuery();
+                connection.commit();
+                // ResultSet.first() is not supported by MS SQL hence using next()
+                if (resultSet.next()) {
+                    queueId = resultSet.getInt(RDBMSConstants.QUEUE_ID);
+                }
+            } catch (SQLException e) {
+                rollback(connection, RDBMSConstants.TASK_RETRIEVING_QUEUE_ID);
+                log.error("Error occurred while retrieving destination queue id " +
+                        "for destination queue " + destinationQueueName, e);
+                throw new AndesException("Error occurred when retrieving queue mapping for queue " + destinationQueueName, e);
+            } finally {
+                contextRead.stop();
+                close(connection, preparedStatement, resultSet,
+                        RDBMSConstants.TASK_RETRIEVING_QUEUE_ID + destinationQueueName);
+            }
+            return queueId;
+        }
+    }
 }
 
